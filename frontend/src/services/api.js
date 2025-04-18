@@ -1,7 +1,7 @@
 import axios from 'axios';
 
 // Assume backend is running on port 8080 by default
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8080';
 
 const apiClient = axios.create({
   baseURL: API_BASE_URL,
@@ -28,8 +28,21 @@ export const checkAuthStatus = () => {
 
 // Function to initiate login (redirects via backend)
 // In the frontend, we'll just navigate the browser window
+// Updated to open a popup
 export const login = () => {
-  window.location.href = `${API_BASE_URL}/login`;
+  const width = 600;
+  const height = 700;
+  const left = (window.screen.width - width) / 2;
+  const top = (window.screen.height - height) / 2;
+  const loginUrl = `${API_BASE_URL}/login`;
+
+  console.log(`Opening popup at: left=${left}, top=${top}`);
+
+  window.open(
+    loginUrl,
+    'GoogleAuthPopup',
+    `width=${width},height=${height},top=${top},left=${left}`
+  );
 };
 
 // Function to logout
@@ -128,6 +141,20 @@ export const moveToTrash = (messageId) => {
 export const untrashEmail = (messageId) => {
   // Using modify endpoint approach for consistency, backend needs to handle it
   return apiClient.post(`/api/emails/${messageId}/modify`, { removeLabelIds: ['TRASH'] });
+};
+
+// Function to send an email
+export const sendEmail = async (to, subject, body) => {
+  try {
+    // Assuming the backend endpoint is /api/send and expects { to, subject, body }
+    const response = await apiClient.post('/api/send', { to, subject, body });
+    console.log('Email sent successfully:', response.data);
+    return response.data; // Or return true/status
+  } catch (error) {
+    console.error('Error sending email:', error.response ? error.response.data : error.message);
+    // Re-throw the error so the component can handle it (e.g., show a notification)
+    throw error;
+  }
 };
 
 export default apiClient;

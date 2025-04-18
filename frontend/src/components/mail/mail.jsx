@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Bookmark, Clock, File, Inbox, OctagonAlert, Send, Star, Trash2 } from 'lucide-react';
+import { Bookmark, Clock, File, Inbox, OctagonAlert, Send, Star, Trash2, Edit } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { AccountSwitcher } from './account-switcher';
@@ -9,17 +9,28 @@ import { Nav } from './nav';
 import { Separator } from '@/components/ui/separator';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '@/components/ui/resizable';
+import { Button } from '@/components/ui/button';
 import { useAuth } from '@/context/AuthContext';
+import { MailComposer } from './mail-composer';
 
 export function Mail({
   defaultLayout = [265, 440, 655],
   defaultCollapsed = false,
-  navCollapsedSize,
+  navCollapsedSize = 4,
 }) {
   const [isCollapsed, setIsCollapsed] = React.useState(defaultCollapsed);
   const [selectedMailId, setSelectedMailId] = React.useState(null);
   const [selectedFolder, setSelectedFolder] = React.useState('Inbox');
+  const [isComposerOpen, setIsComposerOpen] = React.useState(false);
   const { logout } = useAuth();
+
+  const handleComposeClick = () => {
+    setIsComposerOpen(true);
+  };
+
+  const handleCloseComposer = () => {
+    setIsComposerOpen(false);
+  };
 
   const handleSelectFolder = (folder) => {
     setSelectedFolder(folder);
@@ -61,8 +72,8 @@ export function Mail({
         >
           <div
             className={cn(
-              'flex h-[52px] items-center justify-center',
-              isCollapsed ? 'h-[52px]' : 'px-2 justify-between'
+              'flex h-[52px] items-center',
+              isCollapsed ? 'h-[52px] justify-center' : 'px-2 justify-between'
             )}
           >
             <AccountSwitcher
@@ -70,6 +81,17 @@ export function Mail({
               accounts={placeholderAccounts}
               onLogout={logout}
             />
+          </div>
+          <Separator />
+          <div className={cn('p-2', isCollapsed ? 'flex justify-center' : '')}>
+            <Button
+              onClick={handleComposeClick}
+              variant="default"
+              size={isCollapsed ? 'icon' : 'default'}
+              className={cn(!isCollapsed && 'w-full')}
+            >
+              {isCollapsed ? <Edit className="h-4 w-4" /> : 'Compose'}
+            </Button>
           </div>
           <Separator />
           <Nav
@@ -81,31 +103,31 @@ export function Mail({
                 title: 'Inbox',
                 label: '',
                 icon: Inbox,
-                variant: 'default',
+                variant: selectedFolder === 'Inbox' ? 'default' : 'ghost',
               },
               {
                 title: 'Starred',
                 label: '',
                 icon: Star,
-                variant: 'ghost',
+                variant: selectedFolder === 'Starred' ? 'default' : 'ghost',
               },
               {
                 title: 'Snoozed',
                 label: '',
                 icon: Clock,
-                variant: 'ghost',
+                variant: selectedFolder === 'Snoozed' ? 'default' : 'ghost',
               },
               {
                 title: 'Sent',
                 label: '',
                 icon: Send,
-                variant: 'ghost',
+                variant: selectedFolder === 'Sent' ? 'default' : 'ghost',
               },
               {
                 title: 'Drafts',
                 label: '',
                 icon: File,
-                variant: 'ghost',
+                variant: selectedFolder === 'Drafts' ? 'default' : 'ghost',
               },
             ]}
           />
@@ -119,19 +141,19 @@ export function Mail({
                 title: 'Important',
                 label: '',
                 icon: Bookmark,
-                variant: 'ghost',
+                variant: selectedFolder === 'Important' ? 'default' : 'ghost',
               },
               {
                 title: 'Spam',
                 label: '',
                 icon: OctagonAlert,
-                variant: 'ghost',
+                variant: selectedFolder === 'Spam' ? 'default' : 'ghost',
               },
               {
                 title: 'Trash',
                 label: '',
                 icon: Trash2,
-                variant: 'ghost',
+                variant: selectedFolder === 'Trash' ? 'default' : 'ghost',
               },
             ]}
           />
@@ -145,15 +167,14 @@ export function Mail({
           />
         </ResizablePanel>
         <ResizableHandle withHandle />
-        <ResizablePanel defaultSize={defaultLayout[2]}>
+        <ResizablePanel defaultSize={defaultLayout[2]} minSize={30}>
           <div className="h-full w-full flex justify-center items-center">
             <MailDisplay mailId={selectedMailId} />
           </div>
-          {/* <MailDisplay 
-            mailId={selectedMailId} 
-          /> */}
         </ResizablePanel>
       </ResizablePanelGroup>
+
+      {isComposerOpen && <MailComposer onClose={handleCloseComposer} />}
     </TooltipProvider>
   );
 }

@@ -21,8 +21,6 @@ export function AccountSwitcher({ isCollapsed }) {
     return `${names[0][0]}${names[names.length - 1][0]}`.toUpperCase();
   };
 
-  console.log(userProfile);
-
   return (
     <div className={`flex items-center gap-2 w-full ${isCollapsed ? 'justify-center' : 'px-2'}`}>
       {!isCollapsed && (

@@ -10,6 +10,7 @@ import {
   ReplyAll,
   Trash2,
   CornerUpLeft,
+  Download,
 } from 'lucide-react';
 
 import { DropdownMenuContent, DropdownMenuItem } from '@/components/ui/dropdown-menu';
@@ -23,7 +24,7 @@ import { Separator } from '@/components/ui/separator';
 import { Switch } from '@/components/ui/switch';
 import { Textarea } from '@/components/ui/textarea';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { getEmailDetails, markAsRead, markAsUnread, moveToTrash } from '@/services/api'; // Import API functions
+import { getEmailDetails, markAsRead, markAsUnread, moveToTrash, API_BASE_URL } from '@/services/api'; // Import API functions
 import { ScrollArea } from '../ui/scroll-area';
 
 export function MailDisplay({ mailId }) {
@@ -63,46 +64,6 @@ export function MailDisplay({ mailId }) {
     fetchDetails();
   }, [mailId]);
 
-  const decodeBase64Url = (base64Url) => {
-    if (!base64Url) return '';
-    try {
-      let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-      let decoded = atob(base64);
-      const decoder = new TextDecoder('utf-8');
-      return decoder.decode(Uint8Array.from(decoded, (c) => c.charCodeAt(0)));
-    } catch (e) {
-      console.error('Base64 decode failed:', e);
-      return '<Error decoding content>';
-    }
-  };
-
-  const getEmailBody = (payload) => {
-    if (!payload) return '';
-
-    if (payload.mimeType === 'text/html' && payload.body?.data) {
-      return decodeBase64Url(payload.body.data);
-    }
-
-    if (payload.mimeType === 'text/plain' && payload.body?.data) {
-      const text = decodeBase64Url(payload.body.data);
-      return `<pre style="white-space: pre-wrap; word-wrap: break-word;">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
-    }
-
-    if (payload.parts && payload.parts.length > 0) {
-      const htmlPart = payload.parts.find((part) => part.mimeType === 'text/html');
-      if (htmlPart && htmlPart.body?.data) {
-        return decodeBase64Url(htmlPart.body.data);
-      }
-      const textPart = payload.parts.find((part) => part.mimeType === 'text/plain');
-      if (textPart && textPart.body?.data) {
-        const text = decodeBase64Url(textPart.body.data);
-        return `<pre style="white-space: pre-wrap; word-wrap: break-word;">${text.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
-      }
-    }
-
-    return '<Content type not displayable>';
-  };
-
   const handleMarkUnread = async () => {
     if (!mailId) return;
     try {
@@ -136,10 +97,9 @@ export function MailDisplay({ mailId }) {
     return <div className="p-8 text-center text-muted-foreground">No message selected</div>;
   }
 
-  const headers = emailDetails.payload?.headers || [];
-  const subjectHeader = headers.find((h) => h.name === 'Subject')?.value || '(No Subject)';
-  const fromHeader = headers.find((h) => h.name === 'From')?.value || 'Unknown Sender';
-  const dateHeader = headers.find((h) => h.name === 'Date')?.value;
+  const fromHeader = emailDetails.from || 'Unknown Sender';
+  const dateHeader = emailDetails.date; // Use direct 'date' field
+  const subject = emailDetails.subject || '(No Subject)';
 
   let senderName = fromHeader;
   let senderEmail = '';
@@ -152,7 +112,16 @@ export function MailDisplay({ mailId }) {
     senderName = senderEmail.split('@')[0];
   }
 
-  const emailBodyHtml = getEmailBody(emailDetails.payload);
+  const emailBodyHtml = emailDetails?.body || '<p>No content found.</p>';
+  const attachments = emailDetails?.attachments || [];
+
+  const formatFileSize = (bytes) => {
+    if (!bytes || bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+  };
 
   return (
     <div className="flex h-full w-full flex-col">
@@ -272,18 +241,24 @@ export function MailDisplay({ mailId }) {
         </DropdownMenu>
       </div>
       <Separator />
-      <div className="flex flex-1 flex-col overflow-auto">
+      <div className="flex flex-1 flex-col min-h-0">
         <div className="flex items-start p-4">
           <div className="flex items-start gap-4 text-sm">
             <Avatar>
-              <AvatarFallback>{senderName.substring(0, 2).toUpperCase()}</AvatarFallback>
+              <AvatarImage src={emailDetails.sender?.picture} alt={senderName} />
+              <AvatarFallback>
+                {senderName
+                  ?.split(' ')
+                  .filter(Boolean) // Ensure no empty strings from multiple spaces
+                  .map((chunk) => chunk[0])
+                  .join('')}
+              </AvatarFallback>
             </Avatar>
             <div className="grid gap-1">
               <div className="font-semibold">{senderName}</div>
-              <div className="line-clamp-1 text-xs">{senderEmail}</div>
-              <div className="line-clamp-1 text-xs">
-                <span className="font-medium">Reply-To:</span> {fromHeader}
-              </div>
+              <div className="font-semibold text-base mb-2">{subject}</div>
+              <div className="line-clamp-1 text-xs">{`<${senderEmail}>`}</div>
+              {/* Add To/Cc display if needed */}
             </div>
           </div>
           {dateHeader && (
@@ -293,12 +268,39 @@ export function MailDisplay({ mailId }) {
           )}
         </div>
         <Separator />
-        <ScrollArea>
-          <div className="flex-1 p-4 text-sm">
-            <h2 className="text-lg font-semibold mb-4">{subjectHeader}</h2>
-            <div dangerouslySetInnerHTML={{ __html: emailBodyHtml }} />
-          </div>
+        <ScrollArea className="flex-1 whitespace-pre-wrap p-4 text-sm min-h-0">
+          <div dangerouslySetInnerHTML={{ __html: emailBodyHtml }} />
         </ScrollArea>
+        {attachments.length > 0 && (
+          <>
+            <Separator />
+            <ScrollArea className="max-h-32">
+              <div className="p-4">
+                <h4 className="mb-2 text-sm font-medium text-muted-foreground">Attachments ({attachments.length})</h4>
+                <div className="flex flex-wrap gap-2">
+                  {attachments.map((attachment) => (
+                    <a
+                      key={attachment.attachmentId}
+                      href={`${API_BASE_URL}/api/emails/${mailId}/attachments/${attachment.attachmentId}?filename=${encodeURIComponent(attachment.filename)}&mimetype=${encodeURIComponent(attachment.mimeType)}`}
+                      download={attachment.filename}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm"
+                      title={`Download ${attachment.filename}`}
+                    >
+                      <Button variant="outline" size="sm" className="h-8 gap-1">
+                        <Download className="h-3.5 w-3.5 flex-shrink-0" />
+                        <span className="truncate">
+                          {attachment.filename} ({formatFileSize(attachment.size)})
+                        </span>
+                      </Button>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            </ScrollArea>
+          </>
+        )}
         <Separator className="mt-auto" />
         <div className="p-4">
           <form>

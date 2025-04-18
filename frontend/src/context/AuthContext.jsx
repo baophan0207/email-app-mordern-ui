@@ -1,5 +1,6 @@
 import React, { createContext, useState, useContext, useEffect, useCallback } from 'react';
 import { checkAuthStatus, logout as apiLogout, getUserProfile } from '@/services/api';
+import { API_BASE_URL } from '@/services/api';
 
 const AuthContext = createContext(null);
 
@@ -37,6 +38,28 @@ export const AuthProvider = ({ children }) => {
   useEffect(() => {
     verifyAuth();
   }, [verifyAuth]);
+
+  useEffect(() => {
+    const handleAuthMessage = (event) => {
+      const expectedOrigin = (new URL(API_BASE_URL)).origin;
+
+      if (event.origin !== expectedOrigin) {
+        console.warn(`Message received from unexpected origin: ${event.origin}. Expected: ${expectedOrigin}`);
+        return;
+      }
+
+      if (event.data === 'authSuccess') {
+        console.log('Received authSuccess message from popup.');
+        verifyAuth(); 
+      }
+    };
+
+    window.addEventListener('message', handleAuthMessage);
+
+    return () => {
+      window.removeEventListener('message', handleAuthMessage);
+    };
+  }, [verifyAuth]); 
 
   const logout = async () => {
     try {

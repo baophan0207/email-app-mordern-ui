@@ -24,9 +24,9 @@ app.use(
     secret: process.env.SESSION_SECRET || "your-super-secret-key", // Replace with a strong secret in .env
     resave: false,
     saveUninitialized: false,
-    cookie: { maxAge: 86400000 }, // 24 hours
+    cookie: { maxAge: 3600000 }, // Changed to 1 hour (3600000 ms)
     store: new MemoryStore({
-      checkPeriod: 86400000, // prune expired entries every 24h
+      checkPeriod: 86400000, // prune expired entries every 24h (can keep this longer than cookie maxAge)
     }),
   })
 );
@@ -52,14 +52,54 @@ const scopes = [
   "https://www.googleapis.com/auth/userinfo.profile", // Add scope for profile (name, picture)
 ];
 
-// Middleware to check if user is authenticated
-const isAuthenticated = (req, res, next) => {
-  if (req.session.tokens) {
-    // Set credentials for the API client for this request
-    oauth2Client.setCredentials(req.session.tokens);
-    next(); // User is authenticated, proceed
+// Middleware to check if user is authenticated AND refresh token if needed
+const isAuthenticated = async (req, res, next) => { // Made async
+  if (!req.session.tokens) {
+    return res.status(401).send("User not authenticated.");
+  }
+
+  // Set credentials for potential use or refresh check
+  oauth2Client.setCredentials(req.session.tokens);
+
+  // Check if token is expired or close to expiring (e.g., within 5 minutes)
+  const expiryDate = req.session.tokens.expiry_date;
+  const fiveMinutesInMillis = 5 * 60 * 1000;
+  const isTokenExpired = expiryDate ? expiryDate <= (Date.now() + fiveMinutesInMillis) : false;
+
+  if (isTokenExpired) {
+    console.log('Access token expired or nearing expiry, attempting refresh...');
+    const refreshToken = req.session.tokens.refresh_token;
+    if (!refreshToken) {
+      console.log('No refresh token found in session.');
+      delete req.session.tokens; // Clear invalid session
+      return res.status(401).send("Session expired (no refresh token). Please login again.");
+    }
+
+    try {
+      // Ensure only refresh token is set before refreshing
+      oauth2Client.setCredentials({ refresh_token: refreshToken }); 
+      const { credentials } = await oauth2Client.refreshAccessToken();
+      console.log('Token refreshed successfully.');
+
+      // Update session with new credentials (includes new access_token and potentially new expiry_date)
+      // Important: Merge, keeping the original refresh_token if it wasn't returned by refreshAccessToken
+      req.session.tokens = { 
+        ...req.session.tokens, // Keep original refresh_token if not in credentials
+        ...credentials, // Overwrite access_token, expiry_date, etc.
+      };
+      
+      // Set the new credentials for the current request
+      oauth2Client.setCredentials(req.session.tokens);
+      console.log('Session updated with refreshed tokens.');
+      next(); // Proceed with the original request
+    } catch (refreshError) {
+      console.error('Error refreshing access token:', refreshError.message);
+      delete req.session.tokens; // Clear invalid session
+      return res.status(401).send("Session expired or invalid. Please login again.");
+    }
   } else {
-    res.status(401).send("User not authenticated.");
+    // Token is valid, proceed
+    next();
   }
 };
 
@@ -94,14 +134,45 @@ app.get("/oauth2callback", async (req, res) => {
     const { tokens } = await oauth2Client.getToken(code);
     req.session.tokens = tokens; // Store tokens in session
 
-    // Redirect back to the frontend callback route
-    const frontendCallbackUrl = process.env.FRONTEND_URL
-      ? `${process.env.FRONTEND_URL}/auth/callback`
-      : "http://localhost:3000/auth/callback";
-    res.redirect(frontendCallbackUrl);
+    // Get the frontend origin for postMessage security
+    const frontendOrigin = process.env.FRONTEND_URL || "http://localhost:3000";
+
+    // Send HTML to the popup window to communicate back and close
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Success</title></head>
+      <body>
+        <p>Authentication successful. Closing this window...</p>
+        <script>
+          console.log('Sending authSuccess message to opener at origin:', '${frontendOrigin}');
+          if (window.opener) {
+            // IMPORTANT: Send message to specific frontend origin
+            window.opener.postMessage('authSuccess', '${frontendOrigin}');
+            console.log('Message sent.');
+          } else {
+            console.error('window.opener not found!');
+          }
+          console.log('Closing window.');
+          window.close();
+        </script>
+      </body>
+      </html>
+    `);
+
   } catch (error) {
     console.error("Error getting tokens:", error);
-    res.status(500).send("Authentication failed.");
+    // Optional: Send an error message back to the popup? Or just generic fail.
+    res.status(500).send(`
+      <!DOCTYPE html>
+      <html>
+      <head><title>Authentication Failed</title></head>
+      <body>
+        <p>Authentication failed: ${error.message || 'Unknown error'}. Please close this window and try again.</p>
+        <script>window.close();</script> // Optionally close on error too
+      </body>
+      </html>
+    `);
   }
 });
 
@@ -289,102 +360,189 @@ app.get("/api/emails", isAuthenticated, async (req, res) => {
   }
 });
 
+// Helper function to find parts by mimeType
+const findPartByMimeType = (parts, mimeType) => {
+  if (!parts) return null;
+  for (const part of parts) {
+    if (part.mimeType === mimeType) {
+      return part;
+    }
+    if (part.parts) {
+      const found = findPartByMimeType(part.parts, mimeType);
+      if (found) return found;
+    }
+  }
+  return null;
+};
+
+// Helper function to extract attachments
+const extractAttachments = (payload) => {
+  const attachments = [];
+  const parts = payload.parts || [];
+
+  const findAttachmentsRecursive = (part) => {
+    if (part.filename && part.filename.length > 0 && part.body && part.body.attachmentId) {
+      attachments.push({
+        filename: part.filename,
+        mimeType: part.mimeType,
+        size: part.body.size,
+        attachmentId: part.body.attachmentId,
+      });
+    }
+    if (part.parts) {
+      part.parts.forEach(findAttachmentsRecursive);
+    }
+  };
+
+  // Check the main payload body as well, sometimes attachments are not in parts
+  if (payload.filename && payload.filename.length > 0 && payload.body && payload.body.attachmentId) {
+     attachments.push({
+        filename: payload.filename,
+        mimeType: payload.mimeType,
+        size: payload.body.size,
+        attachmentId: payload.body.attachmentId,
+      });
+  }
+
+  parts.forEach(findAttachmentsRecursive);
+  return attachments;
+};
+
 // API Endpoint: Get Email Details
 app.get("/api/emails/:messageId", isAuthenticated, async (req, res) => {
   const { messageId } = req.params;
-  if (!messageId) {
-    return res.status(400).send("Message ID is required.");
-  }
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   try {
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
     const response = await gmail.users.messages.get({
       userId: "me",
       id: messageId,
-      format: "full", // Fetch full email content
+      format: 'full', // Fetch full message to get parts and attachments
     });
 
-    // Basic parsing to find the body (can be complex due to multipart messages)
-    // This is a simplified example; robust parsing might need a library
-    let body = "";
-    const payload = response.data.payload;
+    const message = response.data;
+    const payload = message.payload;
+    const headers = payload.headers;
 
-    if (payload.parts) {
-      // Handle multipart messages (common)
-      const part =
-        payload.parts.find((p) => p.mimeType === "text/html") ||
-        payload.parts.find((p) => p.mimeType === "text/plain");
-      if (part && part.body && part.body.data) {
-        body = Buffer.from(part.body.data, "base64").toString("utf-8");
-      }
-    } else if (payload.body && payload.body.data) {
-      // Handle single part messages
-      body = Buffer.from(payload.body.data, "base64").toString("utf-8");
+    const subjectHeader = headers.find((header) => header.name.toLowerCase() === "subject"); // Case-insensitive
+    const fromHeader = headers.find((header) => header.name.toLowerCase() === "from");
+    const dateHeader = headers.find((header) => header.name.toLowerCase() === "date");
+    const toHeader = headers.find((header) => header.name.toLowerCase() === "to");
+    const ccHeader = headers.find((header) => header.name.toLowerCase() === "cc");
+
+    let bodyHtml = "";
+    let bodyText = "";
+
+    // Find HTML part
+    let htmlPart = findPartByMimeType(payload.parts, 'text/html');
+    if (htmlPart && htmlPart.body && htmlPart.body.data) {
+      bodyHtml = Buffer.from(htmlPart.body.data, "base64").toString("utf-8");
+    } else if (payload.mimeType === 'text/html' && payload.body && payload.body.data) {
+       bodyHtml = Buffer.from(payload.body.data, "base64").toString("utf-8");
     }
 
-    // Add the decoded body to the response (or structure it as needed)
-    const emailData = {
-      ...response.data,
-      decodedBody: body,
-    };
+    // Find Plain Text part (fallback)
+    let textPart = findPartByMimeType(payload.parts, 'text/plain');
+    if (textPart && textPart.body && textPart.body.data) {
+      bodyText = Buffer.from(textPart.body.data, "base64").toString("utf-8");
+    } else if (payload.mimeType === 'text/plain' && payload.body && payload.body.data && !bodyHtml) { // Only use if HTML not found
+       bodyText = Buffer.from(payload.body.data, "base64").toString("utf-8");
+    }
 
-    res.json(emailData);
+    // Extract attachments
+    const attachments = extractAttachments(payload);
+
+    // Prefer HTML body, fallback to text body
+    const bodyContent = bodyHtml || bodyText;
+
+    res.json({
+      id: message.id,
+      snippet: message.snippet,
+      labelIds: message.labelIds,
+      subject: subjectHeader ? subjectHeader.value : "",
+      from: fromHeader ? fromHeader.value : "",
+      date: dateHeader ? dateHeader.value : "",
+      to: toHeader ? toHeader.value : "", // Include To
+      cc: ccHeader ? ccHeader.value : "",   // Include Cc
+      body: bodyContent, // Send the decoded body content
+      attachments: attachments, // Include attachments array
+      threadId: message.threadId, // Include threadId
+      // Include other details if needed
+    });
+
   } catch (error) {
-    console.error(`Error fetching email ${messageId}:`, error);
+    console.error(`Error fetching email details for ${messageId}:`, error.message);
+    // Check if the error is due to invalid credentials (401)
     if (error.response && error.response.status === 401) {
-      delete req.session.tokens;
-      return res
-        .status(401)
-        .send("Authentication token expired or invalid. Please login again.");
+      delete req.session.tokens; // Clear session
+      return res.status(401).send("Authentication error. Please log in again.");
     }
+    // Check if the error is message not found (404)
     if (error.response && error.response.status === 404) {
-      return res.status(404).send("Email not found.");
+        return res.status(404).send("Email not found.");
     }
-    res.status(500).send("Failed to retrieve email details.");
+    res.status(500).send("Error fetching email details.");
   }
 });
 
-// API Endpoint: Move Email to Trash
-app.post("/api/emails/:messageId/trash", isAuthenticated, async (req, res) => {
-  const { messageId } = req.params;
-  console.log(`Request to trash email ID: ${messageId}`); // Logging
+// API Endpoint: Get Email Attachment
+app.get("/api/emails/:messageId/attachments/:attachmentId", isAuthenticated, async (req, res) => {
+  const { messageId, attachmentId } = req.params;
+  // Extract filename and mimetype from query parameters if available (passed by frontend)
+  const { filename: queryFilename, mimetype: queryMimetype } = req.query;
+  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
   try {
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    await gmail.users.messages.trash({
+    // Fetch the raw attachment data
+    const response = await gmail.users.messages.attachments.get({
       userId: "me",
-      id: messageId,
+      messageId: messageId,
+      id: attachmentId,
     });
-    res.status(200).send({ message: "Email moved to trash successfully." });
+
+    const attachmentData = response.data.data;
+    if (!attachmentData) {
+        console.error(`No attachment data found for message ${messageId}, attachment ${attachmentId}`);
+        return res.status(404).send("Attachment data not found.");
+    }
+    const decodedData = Buffer.from(attachmentData, 'base64');
+
+    let filename = queryFilename || 'attachment'; // Use query filename or default
+    let mimeType = queryMimetype || 'application/octet-stream'; // Use query mimetype or default
+
+    // Set headers for file download
+    // Encode filename for safety, especially with special characters
+    res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.setHeader('Content-Type', mimeType);
+    res.send(decodedData);
+
   } catch (error) {
-    console.error(`Error trashing email ${messageId}:`, error);
-    // Add specific error handling similar to GET /api/emails
-    if (error.response && error.response.status === 401) {
-      delete req.session.tokens;
-      return res.status(401).send("Authentication token expired or invalid.");
+    console.error(`Error fetching attachment ${attachmentId} for message ${messageId}:`, error.message);
+    if (error.response) {
+      if (error.response.status === 401) {
+        delete req.session.tokens;
+        return res.status(401).send("Authentication error. Please log in again.");
+      }
+      if (error.response.status === 404) {
+        return res.status(404).send("Attachment or Email not found.");
+      }
     }
-    if (error.response && error.response.status === 404) {
-      return res.status(404).send("Email not found.");
-    }
-    res.status(500).send("Failed to move email to trash.");
+    res.status(500).send("Error fetching attachment.");
   }
 });
 
-// API Endpoint: Modify Email Labels (Star, Important, Spam, Untrash, Read/Unread)
+// API Endpoint: Modify Email (Labels, Trash, etc.)
 app.post("/api/emails/:messageId/modify", isAuthenticated, async (req, res) => {
   const { messageId } = req.params;
-  // Get label modifications from request body
-  const { addLabelIds, removeLabelIds } = req.body;
+  const { addLabelIds, removeLabelIds } = req.body; // e.g., { removeLabelIds: ['UNREAD'] }
 
-  console.log(`Request to modify email ID: ${messageId}`, {
-    addLabelIds,
-    removeLabelIds,
-  }); // Logging
-
+  if (!messageId) {
+    return res.status(400).send("Message ID is required.");
+  }
   if (!addLabelIds && !removeLabelIds) {
     return res
       .status(400)
-      .send({ message: "No labels provided for modification." });
+      .send("Either addLabelIds or removeLabelIds must be provided.");
   }
 
   try {
@@ -393,28 +551,23 @@ app.post("/api/emails/:messageId/modify", isAuthenticated, async (req, res) => {
       userId: "me",
       id: messageId,
       requestBody: {
-        addLabelIds: addLabelIds || [], // Ensure arrays are passed
-        removeLabelIds: removeLabelIds || [],
+        addLabelIds: addLabelIds || [], // Ensure it's an array
+        removeLabelIds: removeLabelIds || [], // Ensure it's an array
       },
     });
-    res.status(200).send({ message: "Email labels modified successfully." });
+    res
+      .status(200)
+      .send({ message: `Email ${messageId} modified successfully.` });
   } catch (error) {
     console.error(`Error modifying email ${messageId}:`, error);
-    // Add specific error handling
-    if (error.response) {
-      if (error.response.status === 401) {
-        delete req.session.tokens;
-        return res.status(401).send("Authentication token expired or invalid.");
-      }
-      if (error.response.status === 404) {
-        return res.status(404).send("Email not found.");
-      }
-      if (error.response.status === 400) {
-        // Potentially invalid label IDs
-        return res
-          .status(400)
-          .send("Bad request: Invalid label IDs or modification.");
-      }
+    if (error.response && error.response.status === 401) {
+      delete req.session.tokens;
+      return res
+        .status(401)
+        .send("Authentication token expired or invalid. Please login again.");
+    }
+    if (error.response && error.response.status === 404) {
+      return res.status(404).send("Email not found.");
     }
     res.status(500).send("Failed to modify email labels.");
   }

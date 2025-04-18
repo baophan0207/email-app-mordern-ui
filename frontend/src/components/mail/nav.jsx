@@ -16,12 +16,12 @@ export function Nav({ isCollapsed, links, selectedFolder, onSelectFolder }) {
               <Tooltip key={index} delayDuration={0}>
                 <TooltipTrigger asChild>
                   <Button
-                    variant="ghost"
+                    variant={selectedFolder === link.title ? 'default' : 'ghost'}
                     size="icon"
                     onClick={() => onSelectFolder(link.title)}
                     className={cn(
                       'flex h-9 w-9 items-center justify-center rounded-lg',
-                      selectedFolder === link.title && 'bg-muted text-foreground'
+                      selectedFolder !== link.title && 'bg-transparent'
                     )}
                     aria-label={link.title}
                   >
