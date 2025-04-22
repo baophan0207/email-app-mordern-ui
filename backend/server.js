@@ -1,11 +1,13 @@
 require("dotenv").config();
 const express = require("express");
+const multer = require("multer");
 const { google } = require("googleapis");
 const session = require("express-session");
 const MemoryStore = require("memorystore")(session);
 const cors = require("cors");
 
 const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
 const port = process.env.PORT || 8080;
 
 // Middleware for parsing JSON request bodies
@@ -574,8 +576,9 @@ app.post("/api/emails/:messageId/modify", isAuthenticated, async (req, res) => {
 });
 
 // API Endpoint: Send Email
-app.post("/api/send", isAuthenticated, async (req, res) => {
+app.post("/api/send", isAuthenticated, upload.array('attachments'), async (req, res) => {
   const { to, subject, body } = req.body;
+  const attachments = req.files;
 
   if (!to || !subject || !body) {
     return res.status(400).send("Missing required fields: to, subject, body");
@@ -584,22 +587,53 @@ app.post("/api/send", isAuthenticated, async (req, res) => {
   try {
     const gmail = google.gmail({ version: "v1", auth: oauth2Client });
 
-    // Construct the raw email message (RFC 2822 format)
-    const emailLines = [];
-    emailLines.push(`To: ${to}`);
-    // Assuming 'me' is the sender, fetch user's profile if needed for 'From'
-    // For simplicity, let Gmail handle the 'From' header based on the authenticated user
-    // emailLines.push(`From: ${senderEmail}`); // Optional: Set explicitly if needed
-    emailLines.push(`Subject: ${subject}`);
-    emailLines.push("Content-Type: text/html; charset=utf-8"); // Assuming HTML body
-    emailLines.push("MIME-Version: 1.0");
-    emailLines.push(""); // Empty line separates headers from body
-    emailLines.push(body);
+    let email;
+    if (attachments && attachments.length > 0) {
+      // Construct multipart/mixed MIME email with attachments
+      const boundary = '----=_Part_' + Date.now();
+      let messageParts = [];
+      messageParts.push(`To: ${to}`);
+      messageParts.push(`Subject: ${subject}`);
+      messageParts.push('MIME-Version: 1.0');
+      messageParts.push(`Content-Type: multipart/mixed; boundary="${boundary}"`);
+      messageParts.push("");
+      messageParts.push(`--${boundary}`);
+      messageParts.push('Content-Type: text/html; charset="UTF-8"');
+      messageParts.push('Content-Transfer-Encoding: 7bit');
+      messageParts.push("");
+      messageParts.push(body);
+      messageParts.push("");
 
-    const email = emailLines.join("\r\n").trim();
+      // Add each attachment
+      attachments.forEach(file => {
+        messageParts.push(`--${boundary}`);
+        messageParts.push(`Content-Type: ${file.mimetype}; name="${file.originalname}"`);
+        messageParts.push('Content-Transfer-Encoding: base64');
+        messageParts.push(`Content-Disposition: attachment; filename="${file.originalname}"`);
+        messageParts.push("");
+        messageParts.push(file.buffer.toString('base64'));
+        messageParts.push("");
+      });
+      messageParts.push(`--${boundary}--`);
+      email = messageParts.join("\r\n");
+    } else {
+      // Simple email without attachments
+      const emailLines = [];
+      emailLines.push(`To: ${to}`);
+      emailLines.push(`Subject: ${subject}`);
+      emailLines.push("Content-Type: text/html; charset=utf-8");
+      emailLines.push("MIME-Version: 1.0");
+      emailLines.push("");
+      emailLines.push(body);
+      email = emailLines.join("\r\n").trim();
+    }
 
     // Base64url encode the email
-    const base64EncodedEmail = Buffer.from(email).toString("base64url");
+    const base64EncodedEmail = Buffer.from(email)
+      .toString("base64")
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
 
     await gmail.users.messages.send({
       userId: "me",

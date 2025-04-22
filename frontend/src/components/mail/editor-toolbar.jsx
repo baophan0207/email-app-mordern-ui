@@ -1,4 +1,5 @@
 import React from 'react';
+import TextStyle from '@tiptap/extension-text-style';
 import {
   Bold,
   Italic,
@@ -229,23 +230,23 @@ export function EditorToolbar({ editor }) {
     return null;
   }
 
-  const setLink = () => {
-    if (!editor) return;
+  // const setLink = () => {
+  //   if (!editor) return;
 
-    const previousUrl = editor.getAttributes('link').href;
-    const url = window.prompt('URL', previousUrl);
+  //   const previousUrl = editor.getAttributes('link').href;
+  //   const url = window.prompt('URL', previousUrl);
 
-    if (url === null) {
-      return;
-    }
+  //   if (url === null) {
+  //     return;
+  //   }
 
-    if (url === '') {
-      editor.chain().focus().extendMarkRange('link').unsetLink().run();
-      return;
-    }
+  //   if (url === '') {
+  //     editor.chain().focus().extendMarkRange('link').unsetLink().run();
+  //     return;
+  //   }
 
-    editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
-  };
+  //   editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run();
+  // };
 
   const removeTextColor = () => editor.chain().focus().unsetColor().run();
   const removeHighlight = () => editor.chain().focus().unsetHighlight().run();
@@ -369,14 +370,14 @@ export function EditorToolbar({ editor }) {
 
       <Separator orientation="vertical" className="h-6 mx-1" />
 
-      <Button
+      {/* <Button
         variant={editor.isActive('link') ? 'secondary' : 'ghost'}
         size="sm"
         onClick={setLink}
         aria-label="Set link"
       >
         <Link2 className="h-4 w-4" />
-      </Button>
+      </Button> */}
 
       <Popover>
         <PopoverTrigger asChild>
@@ -492,7 +493,7 @@ export function EditorToolbar({ editor }) {
       <Separator orientation="vertical" className="h-6 mx-1" />
 
       {/* Indentation Buttons */}
-      <Button
+      {/* <Button
         variant="ghost"
         size="sm"
         onClick={() => editor.chain().focus().liftListItem('listItem').run()}
@@ -509,7 +510,7 @@ export function EditorToolbar({ editor }) {
         aria-label="Indent More"
       >
         <Indent className="h-4 w-4" />
-      </Button>
+      </Button> */}
       {/* <Separator orientation="vertical" className="h-6 mx-1" />
 
       <Button

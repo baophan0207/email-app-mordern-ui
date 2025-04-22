@@ -144,15 +144,31 @@ export const untrashEmail = (messageId) => {
 };
 
 // Function to send an email
-export const sendEmail = async (to, subject, body) => {
+export const sendEmail = async (to, subject, body, attachments = []) => {
   try {
-    // Assuming the backend endpoint is /api/send and expects { to, subject, body }
-    const response = await apiClient.post('/api/send', { to, subject, body });
+    let response;
+    if (attachments && attachments.length > 0) {
+      // Use FormData for emails with attachments
+      const formData = new FormData();
+      formData.append('to', to);
+      formData.append('subject', subject);
+      formData.append('body', body);
+      attachments.forEach((file) => {
+        formData.append('attachments', file);
+      });
+      response = await apiClient.post('/api/send', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+    } else {
+      // Send as JSON if no attachments
+      response = await apiClient.post('/api/send', { to, subject, body });
+    }
     console.log('Email sent successfully:', response.data);
-    return response.data; // Or return true/status
+    return response.data;
   } catch (error) {
     console.error('Error sending email:', error.response ? error.response.data : error.message);
-    // Re-throw the error so the component can handle it (e.g., show a notification)
     throw error;
   }
 };
